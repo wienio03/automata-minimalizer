@@ -10,23 +10,240 @@ type State = Int
 type Symbol = Char
 
 ----------------------------------------------------------------------------------------------
--- 2. Funkcja przejscia
+-- 2. Funkcja przejscia, automaty DFA, NFA, ENFA
 -- Zakladamy, ze funkcja przejscia bedzie miala sygnature State -> Symbol -> State
--- w DFA klasycznie funkcja przejscia ma sygnature Q x E -> Q, wiec jest to poprawny opis
+-- w DFA klasycznie funkcja przejscia ma sygnature δ: Q x Σ -> Q, wiec jest to poprawny opis
 ----------------------------------------------------------------------------------------------
 
-type Transition = State -> Symbol -> State
+type DeterministicTransition = State -> Symbol -> State
+
+type NondeterministicTransition = State -> Maybe Symbol -> [State]
+
+----------------------------------------------------------------------------------------------
+-- DETERMINISTYCZNY AUTOMAT
+-- dfaStates - lista stanow Q
+-- dfaAlphabet - alfabet automatu Σ,
+-- dfaTransition - funkcja przejscia (deterministyczna), sygnatura δ: Q x Σ -> Q
+-- dfaStartState - poczatkowy stan automatu
+-- dfaAcceptingStates - stany koncowe
+----------------------------------------------------------------------------------------------
 
 data DFA = DFA
   { dfaStates :: [State],
     dfaAlphabet :: [Symbol],
-    dfaTransition :: Transition,
+    dfaTransition :: DeterministicTransition,
     dfaStartState :: State,
     dfaAcceptingStates :: [State]
   }
 
 ----------------------------------------------------------------------------------------------
--- 3. Algorytm minimalizacji
+-- NIEDETERMINISTYCZNY AUTOMAT Z PUSTYMI PRZEJSCIAMI
+-- dfaStates - lista stanow Q
+-- dfaAlphabet - alfabet automatu Σ u ε,
+-- dfaTransition - funkcja przejscia (niedeterministyczna), sygnatura δ: Q x (Σ u ε) -> 2^Q
+-- dfaStartState - poczatkowy stan automatu
+-- dfaAcceptingStates - stany koncowe
+----------------------------------------------------------------------------------------------
+
+data ENFA = ENFA
+  { eNfaStates :: [State],
+    eNfaAlphabet :: [Symbol],
+    eNfaTransition :: NondeterministicTransition,
+    eNfaStartState :: State,
+    eNfaAcceptingStates :: [State]
+  }
+
+----------------------------------------------------------------------------------------------
+-- NIEDETERMINISTYCZNY AUTOMAT
+-- dfaStates - lista stanow Q
+-- dfaAlphabet - alfabet automatu Σ,
+-- dfaTransition - funkcja przejscia (niedeterministyczna), sygnatura δ: Q x Σ -> 2^Q
+-- dfaStartState - poczatkowy stan automatu
+-- dfaAcceptingStates - stany koncowe
+----------------------------------------------------------------------------------------------
+
+data NFA = NFA
+  { nfaStates :: [State],
+    nfaAlphabet :: [Symbol],
+    nfaTransition :: NondeterministicTransition,
+    nfaStartState :: State,
+    nfaAcceptingStates :: [State]
+  }
+
+----------------------------------------------------------------------------------------------
+-- Usuwanie pustych przejsc (ENFA -> NFA)
+-- δ̃(q,a) = εDOM(δ(εDOM(q),a))
+----------------------------------------------------------------------------------------------
+
+removeDuplicates :: (Eq a) => [a] -> [a]
+removeDuplicates [] = []
+removeDuplicates (x : xs) =
+  if x `elem` xs
+    then removeDuplicates xs
+    else x : removeDuplicates xs
+
+unionOnLists :: (Eq a) => [a] -> [a] -> [a]
+unionOnLists xs [] = xs
+unionOnLists xs (y : ys) =
+  if y `elem` xs
+    then unionOnLists xs ys
+    else unionOnLists (xs ++ [y]) ys
+
+unionAllLists :: (Eq a) => [[a]] -> [a]
+unionAllLists [] = []
+unionAllLists (l : ls) = unionOnLists l (unionAllLists ls)
+
+epsilonClosure :: ENFA -> State -> [State]
+epsilonClosure enfa s =
+  let transition visited [] = visited
+      transition visited (x : xs) =
+        let epsilonReachable = eNfaTransition enfa x Nothing
+            newStates = [st | st <- epsilonReachable, not (st `elem` visited)]
+            visited' = visited ++ newStates
+            xs' = xs ++ newStates
+         in transition visited' xs'
+   in transition [s] [s]
+
+epsilonClosureSet :: ENFA -> [State] -> [State]
+epsilonClosureSet enfa set = removeDuplicates (concatMap (epsilonClosure enfa) set)
+
+eNfaToNfa :: ENFA -> NFA
+eNfaToNfa enfa =
+  let states = eNfaStates enfa
+      alphabet = eNfaAlphabet enfa
+
+      startState = eNfaStartState enfa
+      acceptingStates = eNfaAcceptingStates enfa
+
+      isAcceptingSet :: [State] -> Bool
+      isAcceptingSet set = any (`elem` acceptingStates) set
+      -- δ̃(q,a) = εDOM(δ(εDOM(q),a))
+      newTransition :: State -> Maybe Symbol -> [State]
+      newTransition s (Just c) =
+        let ecl = epsilonClosure enfa s -- εDOM(q)
+            transitionResult = [eNfaTransition enfa p (Just c) | p <- ecl] -- δ(εDOM(q),a)) jako lista list
+            combined = unionAllLists transitionResult -- po polaczeniu w jedna liste bez duplikatow
+            eclCombined = epsilonClosureSet enfa combined -- εDOM(δ(εDOM(q),a))
+         in eclCombined
+      newTransition _ Nothing = []
+
+      newAcceptingStates :: [State]
+      newAcceptingStates = [s | s <- states, isAcceptingSet (epsilonClosure enfa s)]
+
+      newNFA =
+        NFA
+          { nfaStates = states,
+            nfaAlphabet = alphabet,
+            nfaTransition = newTransition,
+            nfaStartState = startState,
+            nfaAcceptingStates = newAcceptingStates
+          }
+   in newNFA
+
+----------------------------------------------------------------------------------------------
+-- Determinizacja (NFA -> DFA)
+-- uzywam standardowego algorytmu determinizacji za pomoca konstrukcji podzbiorow, czyli
+-- wynikowa funkcja przejscia ma tak naprawde sygnature δ: 2^Q x Σ -> 2^Q
+----------------------------------------------------------------------------------------------
+
+determinize :: NFA -> DFA
+determinize nfa =
+  let alphabet = nfaAlphabet nfa
+      startSet = [nfaStartState nfa]
+
+      transitionNFA :: State -> Symbol -> [State]
+      transitionNFA s c = nfaTransition nfa s (Just c)
+
+      isAcceptingSet :: [State] -> Bool
+      isAcceptingSet set = any (`elem` nfaAcceptingStates nfa) set
+
+      -- lista argumentow to: kolejka stanow do przetworzenia, juz przetworzone stany, istniejace przejscia
+      -- zwracamy juz gotowe krotki ktore wykorzystamy do funkcji przejscia DFA
+      buildDFA :: [[State]] -> [[State]] -> [([State], Symbol, [State])] -> ([[State]], [([State], Symbol, [State])])
+      buildDFA [] visited edges = (visited, edges)
+      buildDFA (s : qs) visited edges =
+        let outTransitions = [(s, c, nextStates s c) | c <- alphabet]
+            targets = [t | (_, _, t) <- outTransitions]
+
+            newSets = [t | t <- targets, not (any (compareSets t) visited)]
+
+            visited' = visited ++ newSets
+            queue' = qs ++ newSets
+            edges' = edges ++ outTransitions
+         in buildDFA queue' visited' edges'
+
+      nextStates :: [State] -> Symbol -> [State]
+      nextStates set c =
+        let listOfLists = [nfaTransition nfa s (Just c) | s <- set]
+            combined = unionAllLists listOfLists
+         in removeDuplicates combined
+
+      (allSets, allEdges) = buildDFA [startSet] [startSet] []
+
+      enumerate :: Int -> [[State]] -> [(Int, [State])]
+      enumerate _ [] = []
+      enumerate i (x : xs) = (i, x) : enumerate (i + 1) xs
+
+      numbered :: [(Int, [State])]
+      numbered = enumerate 0 allSets
+
+      findIndexOf :: [State] -> Int
+      findIndexOf set =
+        case [i | (i, set') <- numbered, compareSets set' set] of
+          (x : _) -> x
+          [] -> error "blad w enumeracji w trakcie determinizacji, brak zbioru"
+
+      newTransition :: State -> Symbol -> State
+      newTransition i c =
+        let oldSet = case lookupSet i numbered of
+              Just s -> s
+              _ -> error "brak stanu w lookupSet"
+            possible =
+              [ t | (s, sym, t) <- allEdges, compareSets s oldSet, sym == c
+              ]
+         in case possible of
+              (res : _) -> findIndexOf res
+              [] -> error "blad w trakcie determinizacji, brak przejścia (niemozliwe w pelnym NFA)"
+
+      lookupSet :: Int -> [(Int, [State])] -> Maybe [State]
+      lookupSet _ [] = Nothing
+      lookupSet k ((i, s) : xs) =
+        if i == k then Just s else lookupSet k xs
+
+      newStates = [0 .. (length allSets - 1)]
+
+      newStart = findIndexOf startSet
+
+      newAccepting =
+        [ i | (i, set) <- numbered, isAcceptingSet set
+        ]
+
+      newDFA =
+        DFA
+          { dfaStates = newStates,
+            dfaAlphabet = alphabet,
+            dfaTransition = newTransition,
+            dfaStartState = newStart,
+            dfaAcceptingStates = newAccepting
+          }
+   in newDFA
+
+insertionSort :: (Ord a) => [a] -> [a]
+insertionSort [] = []
+insertionSort (x : xs) = insertToList x (insertionSort xs)
+  where
+    insertToList v [] = [v]
+    insertToList v (w : ws) =
+      if v <= w then v : w : ws else w : insertToList v ws
+
+compareSets :: (Ord a) => [a] -> [a] -> Bool
+compareSets s1 s2 =
+  let s1' = insertionSort (removeDuplicates s1)
+      s2' = insertionSort (removeDuplicates s2)
+   in s1' == s2'
+
+----------------------------------------------------------------------------------------------
+-- Algorytm minimalizacji
 -- Uzywam algorytmu minimalizacji DFA Hopcrofta z racji dobrej sredniej zlozonosci oraz
 -- najlepszej pesymistycznej zlozonosci (rozwazalem jeszcze algorytm Brzozowskiego oraz Moore'a)
 -- pseudokod:
@@ -50,8 +267,9 @@ data DFA = DFA
 ----------------------------------------------------------------------------------------------
 
 ----------------------------------------------------------------------------------------------
--- 4. Poczatkowa partycja na [Q\F, F]
+-- Poczatkowa partycja na [Q\F, F]
 ----------------------------------------------------------------------------------------------
+
 initialPartition :: DFA -> [[State]]
 initialPartition dfa =
   filter (not . null) [acceptingStates, notAcceptingStates]
@@ -60,14 +278,15 @@ initialPartition dfa =
     notAcceptingStates = filter (not . (`elem` acceptingStates)) (dfaStates dfa)
 
 ----------------------------------------------------------------------------------------------
--- 5. Zwraca liste stanow, ktore pod wplywem symbolu c przechodza do stanow z listy a
+-- Zwraca liste stanow, ktore pod wplywem symbolu c przechodza do stanow z listy a
 ----------------------------------------------------------------------------------------------
+
 computeX :: DFA -> [State] -> Symbol -> [State]
 computeX dfa a c =
   [s | s <- dfaStates dfa, let s' = dfaTransition dfa s c, s' `elem` a]
 
 ----------------------------------------------------------------------------------------------
--- 6. Bierzemy zbior X z computeX i zwracamy (nowaPartycja, nowaWorklista) na podstawie
+-- Bierzemy zbior X z computeX i zwracamy (nowaPartycja, nowaWorklista) na podstawie
 -- pojedynczego zbioru Y ze zbioru partycji jak w pseudokodzie
 ----------------------------------------------------------------------------------------------
 
@@ -91,7 +310,7 @@ splitClasses x p w y =
           (p ++ [y], w)
 
 ----------------------------------------------------------------------------------------------
--- 7. Helper do usuwania pierwszego wystąpienia elementu z listy
+-- Helper do usuwania pierwszego wystąpienia elementu z listy
 ----------------------------------------------------------------------------------------------
 
 removeOne :: (Eq a) => a -> [a] -> [a]
@@ -101,11 +320,10 @@ removeOne x (h : t)
   | otherwise = h : removeOne x t
 
 ----------------------------------------------------------------------------------------------
--- 8. Funkcja, ktora dla danego zbioru A z worklisty W, obecnej partycji P i worklisty W oraz
+-- Funkcja, ktora dla danego zbioru A z worklisty W, obecnej partycji P i worklisty W oraz
 -- symbolu c oblicza X za pomoca computeX oraz dla kazdej klasy Y z partycji P
 -- rozbija ja za pomoca splitClasses
 ----------------------------------------------------------------------------------------------
-
 refine :: DFA -> [State] -> ([[State]], [[State]]) -> Symbol -> ([[State]], [[State]])
 refine dfa a (p, w) c =
   let x = computeX dfa a c
@@ -113,7 +331,7 @@ refine dfa a (p, w) c =
    in (p', w')
 
 ----------------------------------------------------------------------------------------------
--- 9. Glowna petla minimalizacji (odpowiednik while W != empty w pseudokodzie)
+-- Glowna petla minimalizacji (odpowiednik while W != empty w pseudokodzie)
 ----------------------------------------------------------------------------------------------
 
 hopcroftLoop :: DFA -> [[State]] -> [[State]] -> [[State]]
@@ -123,7 +341,7 @@ hopcroftLoop dfa p (a : w) =
    in hopcroftLoop dfa p' w'
 
 ----------------------------------------------------------------------------------------------
--- 10. Funkcja, ktora buduje automat minimalny
+-- Funkcja, ktora buduje automat minimalny
 ----------------------------------------------------------------------------------------------
 
 buildMinimizedDFA :: DFA -> [[State]] -> DFA
@@ -134,7 +352,7 @@ buildMinimizedDFA dfa finalPartition =
       mapOldStateToNew s =
         case [i | (cls, i) <- zip finalPartition [0 ..], s `elem` cls] of
           (x : _) -> x
-          [] -> error "Stan nieznaleziony - blad."
+          [] -> error "blad w trakcie minimalizacji DFA, nie znaleziono stanu"
 
       newTransition :: State -> Symbol -> State
       newTransition i c =
@@ -154,7 +372,7 @@ buildMinimizedDFA dfa finalPartition =
         }
 
 ----------------------------------------------------------------------------------------------
--- 11. Glowna funkcja minimalizujaca automat
+-- Glowna funkcja minimalizujaca automat
 ----------------------------------------------------------------------------------------------
 
 hopcroftMinimize :: DFA -> DFA
@@ -164,30 +382,121 @@ hopcroftMinimize dfa =
       finalPartition = hopcroftLoop dfa p0 w0
    in buildMinimizedDFA dfa finalPartition
 
---------------------------------------------------------------------------------
--- PROSTY TEST
---------------------------------------------------------------------------------
-transitionExample :: State -> Symbol -> State
-transitionExample 0 'a' = 1
-transitionExample 0 'b' = 2
-transitionExample 1 'a' = 3
-transitionExample 1 'b' = 4
-transitionExample 2 'a' = 5
-transitionExample 2 'b' = 4
-transitionExample 3 'a' = 3
-transitionExample 3 'b' = 5
-transitionExample 4 'a' = 5
-transitionExample 4 'b' = 4
-transitionExample 5 'a' = 5
-transitionExample 5 'b' = 5
-transitionExample _ _ = error "Nieoczekiwany stan lub symbol!"
+----------------------------------------------------------------------------------------------
+-- Funkcja do wypisywania automatu (wystarczy wywolac w GHCI > printDFA <nazwa zmiennej>)
+----------------------------------------------------------------------------------------------
 
-exampleDFA :: DFA
-exampleDFA =
-  DFA
-    { dfaStates = [0, 1, 2, 3, 4, 5],
-      dfaAlphabet = ['a', 'b'],
-      dfaTransition = transitionExample,
-      dfaStartState = 0,
-      dfaAcceptingStates = [3, 4]
-    }
+printDFA :: DFA -> IO ()
+printDFA dfa = do
+  print (dfaAlphabet dfa)
+  print (dfaStates dfa)
+
+----------------------------------------------------------------------------------------------
+-- Funkcja do wczytywania automatu z pliku
+----------------------------------------------------------------------------------------------
+
+processDFA :: DFA -> IO ()
+processDFA dfa = do
+  putStrLn "minimalizowanie DFA..."
+  let minimized = hopcroftMinimize dfa
+  printDFA minimized
+
+processNFA :: NFA -> IO ()
+processNFA nfa = do
+  putStrLn "determinizowanie NFA..."
+  let dfa = determinize nfa
+  processDFA dfa
+
+processENFA :: ENFA -> IO ()
+processENFA enfa = do
+  putStrLn "konwertowanie ENFA na NFA..."
+  let nfa = eNfaToNfa enfa
+  processNFA nfa
+
+parseDFA :: [String] -> DFA
+parseDFA (statesLine : alphabetLine : transitionsLines) =
+  let states = read statesLine :: [State]
+      alphabet = read alphabetLine :: [Symbol]
+      transitions = map parseTransition (init $ init transitionsLines)
+      startState = read $ last $ init transitionsLines
+      acceptingStates = read $ last transitionsLines
+   in DFA
+        { dfaStates = states,
+          dfaAlphabet = alphabet,
+          dfaTransition = buildDeterministicTransition transitions,
+          dfaStartState = startState,
+          dfaAcceptingStates = acceptingStates
+        }
+  where
+    parseTransition line =
+      let [s, c, t] = words line
+       in (read s, head c, read t)
+
+    buildDeterministicTransition :: [(State, Symbol, State)] -> DeterministicTransition
+    buildDeterministicTransition transitions s c =
+      case [t | (s', c', t) <- transitions, s' == s, c' == c] of
+        (t : _) -> t
+        _ -> error $ "Nieznane przejście dla stanu " ++ show s ++ " i symbolu " ++ show c
+
+parseNFA :: [String] -> NFA
+parseNFA (statesLine : alphabetLine : transitionsLines) =
+  let states = read statesLine :: [State]
+      alphabet = read alphabetLine :: [Symbol]
+      transitions = map parseTransition (init $ init transitionsLines)
+      startState = read $ last $ init transitionsLines
+      acceptingStates = read $ last transitionsLines
+   in NFA
+        { nfaStates = states,
+          nfaAlphabet = alphabet,
+          nfaTransition = buildNondeterministicTransition transitions,
+          nfaStartState = startState,
+          nfaAcceptingStates = acceptingStates
+        }
+  where
+    parseTransition :: String -> (State, Maybe Symbol, [State])
+    parseTransition line =
+      let (s : c : ts) = words line -- ts to lista reszty slow
+          symbol = if c == "ε" then Nothing else Just (head c)
+       in (read s, symbol, map read ts)
+
+    buildNondeterministicTransition :: [(State, Maybe Symbol, [State])] -> NondeterministicTransition
+    buildNondeterministicTransition transitions s mc =
+      case [ts | (s', c', ts) <- transitions, s' == s, c' == mc] of
+        (ts : _) -> ts
+        _ -> []
+
+parseENFA :: [String] -> ENFA
+parseENFA (statesLine : alphabetLine : transitionsLines) =
+  let states = read statesLine :: [State]
+      alphabet = read alphabetLine :: [Symbol]
+      transitions = map parseTransition (init $ init transitionsLines)
+      startState = read $ last $ init transitionsLines
+      acceptingStates = read $ last transitionsLines
+   in ENFA
+        { eNfaStates = states,
+          eNfaAlphabet = alphabet,
+          eNfaTransition = buildNondeterministicTransition transitions,
+          eNfaStartState = startState,
+          eNfaAcceptingStates = acceptingStates
+        }
+  where
+    parseTransition :: String -> (State, Maybe Symbol, [State])
+    parseTransition line =
+      let (s : c : ts) = words line
+          symbol = if c == "ε" then Nothing else Just (head c)
+       in (read s, symbol, map read ts)
+
+    buildNondeterministicTransition :: [(State, Maybe Symbol, [State])] -> NondeterministicTransition
+    buildNondeterministicTransition transitions s mc =
+      case [ts | (s', c', ts) <- transitions, s' == s, c' == mc] of
+        (ts : _) -> ts
+        _ -> []
+
+processAutomaton :: FilePath -> IO ()
+processAutomaton path = do
+  content <- lines <$> readFile path
+  case content of
+    ("DFA" : rest) -> processDFA $ parseDFA rest
+    ("NFA" : rest) -> processNFA $ parseNFA rest
+    ("ENFA" : rest) -> processENFA $ parseENFA rest
+    _ -> putStrLn "Nieprawidłowy format pliku!"
