@@ -1,7 +1,24 @@
 module MinimalDfa where
 
 ----------------------------------------------------------------------------------------------
--- 1. Definicje typow
+-- ###### WAZNE ######
+-- OCZEKIWANY FORMAT PLIKU WEJSCIOWEGO:
+-- <TYP AUTOMATU (ENFA, NFA, DFA>
+-- SLOWO STATES
+-- W NOWYCH LINIACH ETYKIETY STANOW (LICZBY NATURALNE)
+-- SLOWO ALPHABET
+-- W NOWYCH LINIACH SYMBOLE ALFABETU
+-- SLOWO TRANSITIONS
+-- W NOWYCH LINIACH NAPISY <stan>,<symbol>,<stan>
+-- SLOWO STARTING STATE
+-- POJEDYNCZA ETYKIETA STANU (LICZBA NATURALNA)
+-- ACCEPTING STATES
+-- W NOWYCH LINIACH ETYKIETY STANOW (LICZBY NATURALNE)
+-- ####################
+----------------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------------
+-- Definicje typow
 -- Zakladamy, ze stany to liczby calkowite (Integer) natomiast symbole to znaki (Char)
 ----------------------------------------------------------------------------------------------
 
@@ -10,7 +27,7 @@ type State = Int
 type Symbol = Char
 
 ----------------------------------------------------------------------------------------------
--- 2. Funkcja przejscia, automaty DFA, NFA, ENFA
+-- Funkcja przejscia, automaty DFA, NFA, ENFA
 -- Zakladamy, ze funkcja przejscia bedzie miala sygnature State -> Symbol -> State
 -- w DFA klasycznie funkcja przejscia ma sygnature δ: Q x Σ -> Q, wiec jest to poprawny opis
 ----------------------------------------------------------------------------------------------
@@ -69,6 +86,141 @@ data NFA = NFA
     nfaStartState :: State,
     nfaAcceptingStates :: [State]
   }
+
+----------------------------------------------------------------------------------------------
+-- Funkcje do parsowania DFA, NFA, εNFA z pliku
+----------------------------------------------------------------------------------------------
+
+parseAutomaton :: [String] -> Either String (Either DFA (Either NFA ENFA))
+parseAutomaton ("DFA" : rest) =
+  case parseDFA rest of
+    Just dfa -> Right (Left dfa)
+    Nothing -> Left "Niepoprawny format DFA"
+parseAutomaton ("NFA" : rest) =
+  case parseNFA rest of
+    Just nfa -> Right (Right (Left nfa))
+    Nothing -> Left "Niepoprawny format NFA"
+parseAutomaton ("ENFA" : rest) =
+  case parseENFA rest of
+    Just enfa -> Right (Right (Right enfa))
+    Nothing -> Left "Niepoprawny format ENFA"
+parseAutomaton _ = Left "Nieznany typ automatu"
+
+parseDFA :: [String] -> Maybe DFA
+parseDFA content = do
+  (states, rest1) <- parseSection "STATES" readStates content
+  (alphabet, rest2) <- parseSection "ALPHABET" readAlphabet rest1
+  (transitions, rest3) <- parseSection "TRANSITIONS" readDfaTransitions rest2
+  (startState, rest4) <- parseSection "STARTING STATE" readStartState rest3
+  (acceptingStates, []) <- parseSection "ACCEPTING STATES" readStates rest4
+  Just (DFA states alphabet (lookupTransition transitions) startState acceptingStates)
+
+parseNFA :: [String] -> Maybe NFA
+parseNFA content = do
+  (states, rest1) <- parseSection "STATES" readStates content
+  (alphabet, rest2) <- parseSection "ALPHABET" readAlphabet rest1
+  (transitions, rest3) <- parseSection "TRANSITIONS" readNfaTransitions rest2
+  (startState, rest4) <- parseSection "STARTING STATE" readStartState rest3
+  (acceptingStates, []) <- parseSection "ACCEPTING STATES" readStates rest4
+  Just (NFA states alphabet transitions startState acceptingStates)
+
+parseENFA :: [String] -> Maybe ENFA
+parseENFA content = do
+  (states, rest1) <- parseSection "STATES" readStates content
+  (alphabet, rest2) <- parseSection "ALPHABET" readAlphabet rest1
+  (transitions, rest3) <- parseSection "TRANSITIONS" readEnfaTransitions rest2
+  (startState, rest4) <- parseSection "STARTING STATE" readStartState rest3
+  (acceptingStates, []) <- parseSection "ACCEPTING STATES" readStates rest4
+  Just (ENFA states alphabet transitions startState acceptingStates)
+
+parseSection :: String -> ([String] -> Maybe a) -> [String] -> Maybe (a, [String])
+parseSection header parser (h : rest)
+  | h == header = do
+      let (sectionContent, rest') = span (\line -> line /= "STATES" && line /= "ALPHABET" && line /= "TRANSITIONS" && line /= "STARTING STATE" && line /= "ACCEPTING STATES") rest
+      parsed <- parser sectionContent
+      Just (parsed, rest')
+  | otherwise = Nothing
+parseSection _ _ _ = Nothing
+
+readStates :: [String] -> Maybe [State]
+readStates lines = Just (map read lines)
+
+readAlphabet :: [String] -> Maybe [Symbol]
+readAlphabet lines = Just (map head lines)
+
+readStartState :: [String] -> Maybe State
+readStartState [line] = Just (read line)
+readStartState _ = Nothing
+
+readDfaTransitions :: [String] -> Maybe [(State, Symbol, State)]
+readDfaTransitions lines = Just [(read s1, head sym, read s2) | line <- lines, let [s1, sym, s2] = splitBy ',' line]
+
+readNfaTransitions :: [String] -> Maybe NondeterministicTransition
+readNfaTransitions lines = Just (\s sym -> [st | (s', sym', st) <- parsed, s' == s, sym' == sym])
+  where
+    parsed = [(read s1, if sym == "" then Nothing else Just (head sym), read s2) | line <- lines, let [s1, sym, s2] = splitBy ',' line]
+
+readEnfaTransitions :: [String] -> Maybe NondeterministicTransition
+readEnfaTransitions = readNfaTransitions
+
+lookupTransition :: [(State, Symbol, State)] -> DeterministicTransition
+lookupTransition trans s sym = case [(s', sym', s'') | (s', sym', s'') <- trans, s' == s, sym' == sym] of
+  [(s', sym', s'')] -> s''
+  _ -> error "Niepoprawne przejście dla DFA"
+
+splitBy :: Char -> String -> [String]
+splitBy _ "" = []
+splitBy delimiter str =
+  let (first, rest) = break (== delimiter) str
+   in first : case rest of
+        [] -> []
+        (_ : remaining) -> splitBy delimiter remaining
+
+----------------------------------------------------------------------------------------------
+-- Funkcje do wypisywania DFA, NFA, i εNFA
+----------------------------------------------------------------------------------------------
+
+printDFA :: DFA -> IO ()
+printDFA (DFA states alphabet transition startState acceptingStates) = do
+  putStrLn "DFA"
+  putStrLn "STATES"
+  mapM_ print states
+  putStrLn "ALPHABET"
+  mapM_ print alphabet
+  putStrLn "TRANSITIONS"
+  mapM_ (\(s, sym, s') -> putStrLn $ show s ++ "," ++ [sym] ++ "," ++ show s') [(s, sym, transition s sym) | s <- states, sym <- alphabet]
+  putStrLn "STARTING STATE"
+  print startState
+  putStrLn "ACCEPTING STATES"
+  mapM_ print acceptingStates
+
+printNFA :: NFA -> IO ()
+printNFA (NFA states alphabet transition startState acceptingStates) = do
+  putStrLn "NFA"
+  putStrLn "STATES"
+  mapM_ print states
+  putStrLn "ALPHABET"
+  mapM_ print alphabet
+  putStrLn "TRANSITIONS"
+  mapM_ (\(s, sym) -> mapM_ (\s' -> putStrLn $ show s ++ "," ++ [sym] ++ "," ++ show s') (transition s (Just sym))) [(s, sym) | s <- states, sym <- alphabet]
+  putStrLn "STARTING STATE"
+  print startState
+  putStrLn "ACCEPTING STATES"
+  mapM_ print acceptingStates
+
+printENFA :: ENFA -> IO ()
+printENFA (ENFA states alphabet transition startState acceptingStates) = do
+  putStrLn "ENFA"
+  putStrLn "STATES"
+  mapM_ print states
+  putStrLn "ALPHABET"
+  mapM_ print alphabet
+  putStrLn "TRANSITIONS"
+  mapM_ (\(s, sym) -> mapM_ (\s' -> putStrLn $ show s ++ "," ++ maybe "" (: []) sym ++ "," ++ show s') (transition s sym)) [(s, sym) | s <- states, sym <- map Just alphabet ++ [Nothing]]
+  putStrLn "STARTING STATE"
+  print startState
+  putStrLn "ACCEPTING STATES"
+  mapM_ print acceptingStates
 
 ----------------------------------------------------------------------------------------------
 -- Usuwanie pustych przejsc (ENFA -> NFA)
@@ -270,233 +422,112 @@ compareSets s1 s2 =
 -- Poczatkowa partycja na [Q\F, F]
 ----------------------------------------------------------------------------------------------
 
+-- Funkcja tworząca początkową partycję na {F, Q \ F}
 initialPartition :: DFA -> [[State]]
 initialPartition dfa =
-  filter (not . null) [acceptingStates, notAcceptingStates]
+  [accepting, nonAccepting] >>= \p -> if null p then [] else [p]
   where
-    acceptingStates = dfaAcceptingStates dfa
-    notAcceptingStates = filter (not . (`elem` acceptingStates)) (dfaStates dfa)
+    accepting = dfaAcceptingStates dfa
+    nonAccepting = filter (`notElem` accepting) (dfaStates dfa)
 
-----------------------------------------------------------------------------------------------
--- Zwraca liste stanow, ktore pod wplywem symbolu c przechodza do stanow z listy a
-----------------------------------------------------------------------------------------------
+-- Funkcja znajdująca stany przechodzące na A pod wpływem symbolu c
+findReachable :: DFA -> [State] -> Symbol -> [State]
+findReachable dfa a c = [s | s <- dfaStates dfa, dfaTransition dfa s c `elem` a]
 
-computeX :: DFA -> [State] -> Symbol -> [State]
-computeX dfa a c =
-  [s | s <- dfaStates dfa, let s' = dfaTransition dfa s c, s' `elem` a]
+-- Podział klasy ekwiwalencji Y na dwie części zgodnie z X
+splitClass :: [State] -> [State] -> ([State], [State])
+splitClass x y = (filter (`elem` x) y, filter (`notElem` x) y)
 
-----------------------------------------------------------------------------------------------
--- Bierzemy zbior X z computeX i zwracamy (nowaPartycja, nowaWorklista) na podstawie
--- pojedynczego zbioru Y ze zbioru partycji jak w pseudokodzie
-----------------------------------------------------------------------------------------------
+-- Aktualizacja partycji zgodnie z algorytmem Hopcrofta
+refinePartition :: DFA -> [[State]] -> [[State]] -> Symbol -> ([[State]], [[State]])
+refinePartition dfa p w c = foldl process ([], w) p
+  where
+    process (newP, newW) y =
+      let x = findReachable dfa y c
+          (xIntY, yDiffX) = splitClass x y
+       in case (xIntY, yDiffX) of
+            ([], _) -> (newP ++ [y], newW)
+            (_, []) -> (newP ++ [y], newW)
+            _ ->
+              let (smaller, larger) = if length xIntY <= length yDiffX then (xIntY, yDiffX) else (yDiffX, xIntY)
+               in (newP ++ [xIntY, yDiffX], if y `elem` newW then remove y newW ++ [xIntY, yDiffX] else newW ++ [smaller])
 
-splitClasses :: [State] -> [[State]] -> [[State]] -> [State] -> ([[State]], [[State]])
-splitClasses x p w y =
-  let yIntersectX = filter (`elem` x) y
-      yDifferenceX = filter (not . (`elem` x)) y
-   in if not (null yIntersectX) && not (null yDifferenceX)
-        then
-          let p' = p ++ [yIntersectX, yDifferenceX]
+-- Usuwanie pierwszego wystąpienia elementu z listy
+remove :: (Eq a) => a -> [a] -> [a]
+remove _ [] = []
+remove x (y : ys)
+  | x == y = ys
+  | otherwise = y : remove x ys
 
-              isYinW = y `elem` w
-              smallerSet = if length yIntersectX <= length yDifferenceX then yIntersectX else yDifferenceX
-              biggerSet = if smallerSet == yIntersectX then yDifferenceX else yIntersectX
-
-              w'
-                | isYinW = removeOne y w ++ [yIntersectX, yDifferenceX]
-                | otherwise = w ++ [smallerSet]
-           in (p', w')
-        else
-          (p ++ [y], w)
-
-----------------------------------------------------------------------------------------------
--- Helper do usuwania pierwszego wystąpienia elementu z listy
-----------------------------------------------------------------------------------------------
-
-removeOne :: (Eq a) => a -> [a] -> [a]
-removeOne _ [] = []
-removeOne x (h : t)
-  | x == h = t
-  | otherwise = h : removeOne x t
-
-----------------------------------------------------------------------------------------------
--- Funkcja, ktora dla danego zbioru A z worklisty W, obecnej partycji P i worklisty W oraz
--- symbolu c oblicza X za pomoca computeX oraz dla kazdej klasy Y z partycji P
--- rozbija ja za pomoca splitClasses
-----------------------------------------------------------------------------------------------
-refine :: DFA -> [State] -> ([[State]], [[State]]) -> Symbol -> ([[State]], [[State]])
-refine dfa a (p, w) c =
-  let x = computeX dfa a c
-      (p', w') = foldl (\(pAcc, wAcc) y -> let (pAcc', wAcc') = splitClasses x pAcc wAcc y in (pAcc', wAcc')) ([], w) p
-   in (p', w')
-
-----------------------------------------------------------------------------------------------
--- Glowna petla minimalizacji (odpowiednik while W != empty w pseudokodzie)
-----------------------------------------------------------------------------------------------
-
+-- Główna pętla algorytmu
 hopcroftLoop :: DFA -> [[State]] -> [[State]] -> [[State]]
 hopcroftLoop _ p [] = p
 hopcroftLoop dfa p (a : w) =
-  let (p', w') = foldl (refine dfa a) (p, w) (dfaAlphabet dfa)
-   in hopcroftLoop dfa p' w'
+  let (newP, newW) = foldl (\(pAcc, wAcc) c -> refinePartition dfa pAcc wAcc c) (p, w) (dfaAlphabet dfa)
+   in hopcroftLoop dfa newP newW
 
-----------------------------------------------------------------------------------------------
--- Funkcja, ktora buduje automat minimalny
-----------------------------------------------------------------------------------------------
+-- Mapowanie starych stanów na nowe indeksy
+stateMapping :: [[State]] -> State -> State
+stateMapping partition s = case [i | (i, cls) <- zip [0 ..] partition, s `elem` cls] of
+  (x : _) -> x
+  [] -> error "State mapping failed"
 
+-- Tworzenie minimalnego DFA
 buildMinimizedDFA :: DFA -> [[State]] -> DFA
-buildMinimizedDFA dfa finalPartition =
-  let newStates = [0 .. length finalPartition - 1]
+buildMinimizedDFA dfa partition =
+  let newStates = [0 .. length partition - 1]
+      newStart = stateMapping partition (dfaStartState dfa)
+      newAccept = [i | (i, cls) <- zip newStates partition, any (`elem` dfaAcceptingStates dfa) cls]
+      newTransition s c = stateMapping partition (dfaTransition dfa (head (partition !! s)) c)
+   in DFA newStates (dfaAlphabet dfa) newTransition newStart newAccept
 
-      mapOldStateToNew :: State -> State
-      mapOldStateToNew s =
-        case [i | (cls, i) <- zip finalPartition [0 ..], s `elem` cls] of
-          (x : _) -> x
-          [] -> error "blad w trakcie minimalizacji DFA, nie znaleziono stanu"
-
-      newTransition :: State -> Symbol -> State
-      newTransition i c =
-        let oldRep = head (finalPartition !! i)
-            oldDest = dfaTransition dfa oldRep c
-         in mapOldStateToNew oldDest
-
-      newStart = mapOldStateToNew (dfaStartState dfa)
-
-      newAccept = [i | (cls, i) <- zip finalPartition [0 ..], any (`elem` dfaAcceptingStates dfa) cls]
-   in DFA
-        { dfaStates = newStates,
-          dfaAlphabet = dfaAlphabet dfa,
-          dfaTransition = newTransition,
-          dfaStartState = newStart,
-          dfaAcceptingStates = newAccept
-        }
-
-----------------------------------------------------------------------------------------------
--- Glowna funkcja minimalizujaca automat
-----------------------------------------------------------------------------------------------
-
+-- Minimalizacja DFA
 hopcroftMinimize :: DFA -> DFA
-hopcroftMinimize dfa =
-  let p0 = initialPartition dfa
-      w0 = p0
-      finalPartition = hopcroftLoop dfa p0 w0
-   in buildMinimizedDFA dfa finalPartition
+hopcroftMinimize dfa = buildMinimizedDFA dfa (hopcroftLoop dfa (initialPartition dfa) (initialPartition dfa))
 
-----------------------------------------------------------------------------------------------
--- Funkcja do wypisywania automatu (wystarczy wywolac w GHCI > printDFA <nazwa zmiennej>)
-----------------------------------------------------------------------------------------------
+-- Wypisywanie przejść w DFA
+printDFATransition :: DFA -> IO ()
+printDFATransition dfa =
+  mapM_ print [(q, a, dfaTransition dfa q a) | q <- dfaStates dfa, a <- dfaAlphabet dfa]
 
-printDFA :: DFA -> IO ()
-printDFA dfa = do
-  print (dfaAlphabet dfa)
-  print (dfaStates dfa)
+-- Wypisywanie przejść w NFA
+printNFATransition :: NFA -> IO ()
+printNFATransition nfa =
+  mapM_ print [(q, a, nfaTransition nfa q (Just a)) | q <- nfaStates nfa, a <- nfaAlphabet nfa]
 
-----------------------------------------------------------------------------------------------
--- Funkcja do wczytywania automatu z pliku
-----------------------------------------------------------------------------------------------
+-- Wypisywanie przejść w ENFA
+printENFATransition :: ENFA -> IO ()
+printENFATransition enfa =
+  mapM_ print [(q, a, eNfaTransition enfa q (Just a)) | q <- eNfaStates enfa, a <- eNfaAlphabet enfa]
 
-processDFA :: DFA -> IO ()
-processDFA dfa = do
-  putStrLn "minimalizowanie DFA..."
-  let minimized = hopcroftMinimize dfa
-  printDFA minimized
-
-processNFA :: NFA -> IO ()
-processNFA nfa = do
-  putStrLn "determinizowanie NFA..."
-  let dfa = determinize nfa
-  processDFA dfa
-
-processENFA :: ENFA -> IO ()
-processENFA enfa = do
-  putStrLn "konwertowanie ENFA na NFA..."
-  let nfa = eNfaToNfa enfa
-  processNFA nfa
-
-parseDFA :: [String] -> DFA
-parseDFA (statesLine : alphabetLine : transitionsLines) =
-  let states = read statesLine :: [State]
-      alphabet = read alphabetLine :: [Symbol]
-      transitions = map parseTransition (init $ init transitionsLines)
-      startState = read $ last $ init transitionsLines
-      acceptingStates = read $ last transitionsLines
-   in DFA
-        { dfaStates = states,
-          dfaAlphabet = alphabet,
-          dfaTransition = buildDeterministicTransition transitions,
-          dfaStartState = startState,
-          dfaAcceptingStates = acceptingStates
-        }
-  where
-    parseTransition line =
-      let [s, c, t] = words line
-       in (read s, head c, read t)
-
-    buildDeterministicTransition :: [(State, Symbol, State)] -> DeterministicTransition
-    buildDeterministicTransition transitions s c =
-      case [t | (s', c', t) <- transitions, s' == s, c' == c] of
-        (t : _) -> t
-        _ -> error $ "Nieznane przejście dla stanu " ++ show s ++ " i symbolu " ++ show c
-
-parseNFA :: [String] -> NFA
-parseNFA (statesLine : alphabetLine : transitionsLines) =
-  let states = read statesLine :: [State]
-      alphabet = read alphabetLine :: [Symbol]
-      transitions = map parseTransition (init $ init transitionsLines)
-      startState = read $ last $ init transitionsLines
-      acceptingStates = read $ last transitionsLines
-   in NFA
-        { nfaStates = states,
-          nfaAlphabet = alphabet,
-          nfaTransition = buildNondeterministicTransition transitions,
-          nfaStartState = startState,
-          nfaAcceptingStates = acceptingStates
-        }
-  where
-    parseTransition :: String -> (State, Maybe Symbol, [State])
-    parseTransition line =
-      let (s : c : ts) = words line -- ts to lista reszty slow
-          symbol = if c == "ε" then Nothing else Just (head c)
-       in (read s, symbol, map read ts)
-
-    buildNondeterministicTransition :: [(State, Maybe Symbol, [State])] -> NondeterministicTransition
-    buildNondeterministicTransition transitions s mc =
-      case [ts | (s', c', ts) <- transitions, s' == s, c' == mc] of
-        (ts : _) -> ts
-        _ -> []
-
-parseENFA :: [String] -> ENFA
-parseENFA (statesLine : alphabetLine : transitionsLines) =
-  let states = read statesLine :: [State]
-      alphabet = read alphabetLine :: [Symbol]
-      transitions = map parseTransition (init $ init transitionsLines)
-      startState = read $ last $ init transitionsLines
-      acceptingStates = read $ last transitionsLines
-   in ENFA
-        { eNfaStates = states,
-          eNfaAlphabet = alphabet,
-          eNfaTransition = buildNondeterministicTransition transitions,
-          eNfaStartState = startState,
-          eNfaAcceptingStates = acceptingStates
-        }
-  where
-    parseTransition :: String -> (State, Maybe Symbol, [State])
-    parseTransition line =
-      let (s : c : ts) = words line
-          symbol = if c == "ε" then Nothing else Just (head c)
-       in (read s, symbol, map read ts)
-
-    buildNondeterministicTransition :: [(State, Maybe Symbol, [State])] -> NondeterministicTransition
-    buildNondeterministicTransition transitions s mc =
-      case [ts | (s', c', ts) <- transitions, s' == s, c' == mc] of
-        (ts : _) -> ts
-        _ -> []
-
-processAutomaton :: FilePath -> IO ()
-processAutomaton path = do
-  content <- lines <$> readFile path
-  case content of
-    ("DFA" : rest) -> processDFA $ parseDFA rest
-    ("NFA" : rest) -> processNFA $ parseNFA rest
-    ("ENFA" : rest) -> processENFA $ parseENFA rest
-    _ -> putStrLn "Nieprawidłowy format pliku!"
+main :: IO ()
+main = do
+  content <- lines <$> readFile "automaton.txt"
+  case parseAutomaton content of
+    Left err -> putStrLn err
+    Right (Right (Right enfa)) -> do
+      putStrLn "Parsed ENFA:"
+      printENFA enfa
+      let expectedEnfa =
+            ENFA
+              [0, 1, 2]
+              ['a', 'b']
+              ( \s c -> case (s, c) of
+                  (0, Nothing) -> [1]
+                  (1, Just 'a') -> [1, 2]
+                  (2, Just 'b') -> [0]
+                  _ -> []
+              )
+              0
+              [2]
+      putStrLn "Expected ENFA:"
+      printENFA expectedEnfa
+      let nfa = eNfaToNfa enfa
+      putStrLn "\nConverted to NFA:"
+      printNFA nfa
+      let dfa = determinize nfa
+      putStrLn "\nConverted to DFA:"
+      printDFA dfa
+      let minDfa = hopcroftMinimize dfa
+      putStrLn "\nMinimized DFA:"
+      printDFA minDfa

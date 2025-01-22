@@ -1,12 +1,17 @@
 ENFA
-[0,1,2,3]
-['a','b']
-0 ε 1
-0 ε 2
-1 a 1
-1 a 3
-2 b 2
-2 b 3
-3 ε
-[0]
-[3]
+STATES
+0
+1
+2
+ALPHABET
+a
+b
+TRANSITIONS
+0,,1
+1,a,1
+1,a,2
+2,b,0
+STARTING STATE
+0
+ACCEPTING STATES
+2
