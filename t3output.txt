@@ -1,0 +1,25 @@
+Parsed DFA:
+DFA:
+  States: {0 1 2}
+  Alphabet: {a b}
+  Transitions:
+    0 -> a -> 1
+    0 -> b -> 2
+    1 -> a -> 0
+    1 -> b -> 2
+    2 -> a -> 1
+    2 -> b -> 0
+  Start State: 0
+  Accepting States: {2}
+
+Minimized DFA:
+DFA:
+  States: {0 1}
+  Alphabet: {a b}
+  Transitions:
+    0 -> a -> 0
+    0 -> b -> 1
+    1 -> a -> 0
+    1 -> b -> 0
+  Start State: 0
+  Accepting States: {1}

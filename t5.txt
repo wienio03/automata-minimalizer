@@ -1,0 +1,25 @@
+NFA
+STATES
+0
+1
+2
+3
+4
+5
+ALPHABET
+a
+b
+c
+d
+TRANSITIONS
+0,a,1
+0,b,2
+1,c,3
+2,c,3
+3,d,4
+4,a,5
+5,b,0
+STARTING STATE
+0
+ACCEPTING STATES
+5
